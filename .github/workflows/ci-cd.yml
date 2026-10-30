@@ -1,0 +1,90 @@
+name: ci-cd
+
+# Любой коммит (любая ветка): сборка, проверка и push образа с тегом = короткий SHA.
+# Git-тег v*: сборка, push образа с этим тегом и деплой в кластер.
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: cr.yandex/${{ secrets.YC_REGISTRY_ID }}
+  IMAGE_NAME: diploma-app
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Тег образа
+        id: meta
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="${GITHUB_SHA::7}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Сборка
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:test
+          build-args: APP_VERSION=${{ steps.meta.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Проверка образа
+        run: |
+          docker run -d --name t -p 8080:80 "$IMAGE_NAME:test"
+          for i in $(seq 1 15); do
+            curl -fsS http://127.0.0.1:8080/healthz && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8080/ | grep -q "${{ steps.meta.outputs.tag }}"
+          docker rm -f t
+
+      - name: Вход в Yandex Container Registry
+        env:
+          CI_KEY: ${{ secrets.YC_CI_SA_KEY_JSON }}
+        run: printf '%s' "$CI_KEY" | docker login --username json_key --password-stdin cr.yandex
+
+      - name: Push
+        run: |
+          IMAGE="$REGISTRY/$IMAGE_NAME:${{ steps.meta.outputs.tag }}"
+          docker tag "$IMAGE_NAME:test" "$IMAGE"
+          docker push "$IMAGE"
+
+  deploy:
+    # только для тегов v*
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: azure/setup-kubectl@v4
+
+      - name: Доступ к кластеру
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          mkdir -p ~/.kube
+          printf '%s' "$KUBE_CONFIG" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Деплой
+        run: |
+          kubectl -n diploma set image deployment/diploma-app \
+            nginx="$REGISTRY/$IMAGE_NAME:${{ needs.build.outputs.tag }}"
+          kubectl -n diploma rollout status deployment/diploma-app --timeout=3m
