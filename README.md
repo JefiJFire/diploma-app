@@ -47,7 +47,16 @@ make push REGISTRY_ID=<id реестра> VERSION=v0.1.0
 
 Образ будет доступен как `cr.yandex/<id реестра>/diploma-app:v0.1.0`. Скачивание образов в реестре открыто (роль `puller` для `allUsers`), поэтому кластеру секрет не нужен.
 
-## Планируемый CI/CD (подключается в конце)
+## CI/CD (GitHub Actions)
 
-- любой коммит: сборка и push образа с тегом из короткого SHA коммита;
-- git-тег `v*`: сборка, push образа с этим тегом и деплой этой версии в кластер.
+`.github/workflows/ci-cd.yml`:
+- любой коммит: сборка образа, проверка (`/healthz` и версия на странице), push в реестр с тегом коротким SHA;
+- git-тег `v*` (например, `git tag v1.0.0 && git push --tags`): сборка, push с этим тегом и деплой в кластер.
+
+Секреты репозитория (Settings, Secrets and variables, Actions):
+
+| Секрет | Откуда |
+|---|---|
+| `YC_REGISTRY_ID` | `terraform output -raw registry_id` (bootstrap) |
+| `YC_CI_SA_KEY_JSON` | `terraform output -raw ci_sa_key_json` (bootstrap), роль только `images.pusher` |
+| `KUBE_CONFIG` | `diploma-k8s/ci/make-kubeconfig.sh <IP мастера>` |
