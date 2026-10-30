@@ -47,13 +47,13 @@ jobs:
 
       - name: Проверка образа
         run: |
-          docker run -d --name t -p 8080:80 "$IMAGE_NAME:test"
+          docker run -d --name smoke-test -p 8080:80 "$IMAGE_NAME:test"
           for i in $(seq 1 15); do
             curl -fsS http://127.0.0.1:8080/healthz && break
             sleep 1
           done
           curl -fsS http://127.0.0.1:8080/ | grep -q "${{ steps.meta.outputs.tag }}"
-          docker rm -f t
+          docker rm -f smoke-test
 
       - name: Вход в Yandex Container Registry
         env:
